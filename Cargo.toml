@@ -43,7 +43,8 @@ esp-wifi = { version = "0.14.1", features = [
 ] }
 static_cell = { version = "2.1.0", features = ["nightly"] }
 trouble-host = { version = "0.1.0", features = ["gatt"] }
-axp192-dd = { version = "0.2", features = ["defmt"] }
+axp192-dd = { path = "../axp192-dd", features = ["defmt"] }
+fusb302b = { path = "../fusb302b", features = ["defmt"] }
 embedded-hal-async = "1.0.0"
 
 

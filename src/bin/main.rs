@@ -7,8 +7,9 @@
 )]
 
 use axp192_dd::{Axp192Async, AxpError, ChargeCurrentValue, Gpio0FunctionSelect, LdoId};
+use fusb302b::{Fusb302bAsync, FusbError};
 use bt_hci::controller::ExternalController;
-use defmt::info;
+use defmt::{info, error};
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use esp_hal::{
@@ -39,14 +40,18 @@ async fn main(spawner: Spawner) {
     esp_hal_embassy::init(timer0.timer0);
 
     info!("Embassy initialized!");
-    let config: I2cConfig = I2cConfig::default().with_frequency(Rate::from_khz(400));
-    let i2c = I2c::new(p.I2C1, config)
+    let int_fusb_pin = p.GPIO0;
+        let config_i2c0: I2cConfig = I2cConfig::default().with_frequency(Rate::from_khz(100));
+    let config_i2c1: I2cConfig = I2cConfig::default().with_frequency(Rate::from_khz(400));
+    let i2c0 = I2c::new(p.I2C0, config_i2c0).unwrap().with_sda(p.GPIO25).with_scl(p.GPIO26).into_async();
+
+    let i2c1 = I2c::new(p.I2C1, config_i2c1)
         .unwrap()
         .with_sda(p.GPIO21)
         .with_scl(p.GPIO22)
         .into_async();
 
-    init_m5stickc_plus_pmic(i2c).await.unwrap();
+    init_m5stickc_plus_pmic(i2c1).await.unwrap();
 
     let rng = esp_hal::rng::Rng::new(p.RNG);
     let timer1 = TimerGroup::new(p.TIMG0);
@@ -56,15 +61,22 @@ async fn main(spawner: Spawner) {
     let transport = BleConnector::new(&wifi_init, p.BT);
     let _ble_controller = ExternalController::<_, 20>::new(transport);
 
-    // TODO: Spawn some tasks
-    let _ = spawner;
+    spawner.must_spawn(pd_task(i2c0));
 
     loop {
-        info!("Hello world!");
+        //info!("Hello world!");
         Timer::after(Duration::from_secs(1)).await;
     }
+}
 
-    // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v1.0.0-beta.1/examples/src/bin
+#[embassy_executor::task]
+async fn pd_task(i2c: I2c<'static, Async>) {
+    let mut fusb = Fusb302bAsync::new(i2c);
+    match fusb.ll.device_id().read_async().await {
+        Ok(device_id) => info!("FUSB302B device ID: {}", device_id),
+        Err(e) => error!("Failed to read device ID: {:?}", e),
+    };
+
 }
 
 #[rustfmt::skip]
