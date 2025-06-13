@@ -16,7 +16,6 @@ esp-hal = { version = "=1.0.0-beta.1", features = [
   "unstable",
 ] }
 
-bt-hci = { version = "0.3", features = [] }
 critical-section = "1.2.0"
 embassy-executor = { version = "0.7.0", features = [
   "defmt",
@@ -36,15 +35,7 @@ esp-backtrace = { version = "0.16.0", features = [
 ] }
 esp-hal-embassy = { version = "0.8.1", features = ["defmt", "esp32"] }
 esp-println = { version = "0.14.0", features = ["defmt-espflash", "esp32"] }
-esp-wifi = { version = "0.14.1", features = [
-  "ble",
-  "builtin-scheduler",
-  "defmt",
-  "esp-alloc",
-  "esp32",
-] }
 static_cell = { version = "2.1.0", features = ["nightly"] }
-trouble-host = { version = "0.1.0", features = ["gatt"] }
 axp192-dd = { path = "../axp192-dd", features = ["defmt"] }
 fusb302b = { path = "../fusb302b", features = ["defmt"] }
 embedded-hal-async = "1.0.0"

@@ -8,7 +8,6 @@
 
 use axp192_dd::{Axp192Async, AxpError, ChargeCurrentValue, Gpio0FunctionSelect, LdoId};
 use fusb302b::{Fusb302bAsync, FusbError};
-use bt_hci::controller::ExternalController;
 use defmt::{info, error};
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
@@ -38,15 +37,9 @@ use embedded_graphics::{
 
 use static_cell::StaticCell;
 
-use esp_wifi::ble::controller::BleConnector;
 use {esp_backtrace as _, esp_println as _};
 
 extern crate alloc;
-
-// This creates a default app-descriptor required by the esp-idf bootloader.
-// For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
-esp_bootloader_esp_idf::esp_app_desc!();
-
 
 const W: u16 = 135;
 const H: u16 = 240;
@@ -79,14 +72,6 @@ async fn main(spawner: Spawner) {
         .into_async();
 
     init_m5stickc_plus_pmic(i2c1).await.unwrap();
-
-    let rng = esp_hal::rng::Rng::new(p.RNG);
-    let timer1 = TimerGroup::new(p.TIMG0);
-    let wifi_init = esp_wifi::init(timer1.timer0, rng, p.RADIO_CLK)
-        .expect("Failed to initialize WIFI/BLE controller");
-    // find more examples https://github.com/embassy-rs/trouble/tree/main/examples/esp32
-    let transport = BleConnector::new(&wifi_init, p.BT);
-    let _ble_controller = ExternalController::<_, 20>::new(transport);
 
     let (rx_buffer, rx_descriptors, tx_buffer, tx_descriptors) = esp_hal::dma_buffers!(4, 32_000);
     let dma_rx_buf = DmaRxBuf::new(rx_descriptors, rx_buffer).unwrap();
