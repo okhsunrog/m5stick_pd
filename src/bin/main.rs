@@ -6,7 +6,7 @@
     holding buffers for the duration of a data transfer."
 )]
 
-use alloc::vec::Vec;
+// use alloc::vec::Vec;
 use axp192_dd::{Axp192Async, AxpError, ChargeCurrentValue, Gpio0FunctionSelect, LdoId};
 use defmt::{error, info};
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
@@ -40,12 +40,12 @@ use mipidsi::{
     raw_framebuf::RawFrameBuf,
 };
 
-use esp_alloc::HEAP;
+// use esp_alloc::HEAP;
 use static_cell::StaticCell;
 
 use {esp_backtrace as _, esp_println as _};
 
-extern crate alloc;
+// extern crate alloc;
 
 const X_OFFSET: u16 = 52;
 const Y_OFFSET: u16 = 40;
@@ -54,13 +54,14 @@ const H_ACTIVE: u16 = 240; // 240
 const W: u16 = W_ACTIVE as u16 + X_OFFSET;
 const H: u16 = H_ACTIVE as u16 + Y_OFFSET;
 const PXL_SIZE: usize = 2;
-const FRAME_BYTE_SIZE: u16 = W_ACTIVE * H_ACTIVE * PXL_SIZE as u16;
+const FRAME_BUFFER_SIZE: usize = (W_ACTIVE * H_ACTIVE) as usize * PXL_SIZE;
+static FRAME_BUFFER: StaticCell<[u8; FRAME_BUFFER_SIZE]> = StaticCell::new();
 
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) {
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let p = esp_hal::init(config);
-    esp_alloc::heap_allocator!(#[unsafe(link_section = ".dram2_uninit")] size: 64 * 1024);
+    // esp_alloc::heap_allocator!(#[unsafe(link_section = ".dram2_uninit")] size: 64 * 1024);
 
     let timer0 = TimerGroup::new(p.TIMG1);
     esp_hal_embassy::init(timer0.timer0);
@@ -128,13 +129,15 @@ async fn main(spawner: Spawner) {
         .unwrap();
     info!("Display initialized!");
 
-    let mut frame: Vec<u8> = Vec::new();
+    let frame_buffer = FRAME_BUFFER.init([0; FRAME_BUFFER_SIZE]);
 
-    frame.resize(FRAME_BYTE_SIZE.into(), 0);
-    info!("Global heap stats: {}", HEAP.stats());
+    // let mut frame: Vec<u8> = Vec::new();
+
+    // frame.resize(FRAME_BYTE_SIZE.into(), 0);
+    // info!("Global heap stats: {}", HEAP.stats());
     {
         let mut raw_fb = RawFrameBuf::<Rgb565, _>::new(
-            frame.as_mut_slice(),
+            frame_buffer.as_mut_slice(),
             W_ACTIVE as usize,
             H_ACTIVE as usize,
         );
@@ -151,7 +154,7 @@ async fn main(spawner: Spawner) {
     }
 
     display
-        .show_raw_data(0, 0, W_ACTIVE, H_ACTIVE, &frame)
+        .show_raw_data(0, 0, W_ACTIVE, H_ACTIVE, frame_buffer)
         .await
         .unwrap();
 
