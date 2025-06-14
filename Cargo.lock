@@ -1179,6 +1179,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lcd-async"
+version = "0.9.0"
+dependencies = [
+ "embedded-graphics",
+ "embedded-graphics-core",
+ "embedded-hal 1.0.0",
+ "embedded-hal-async",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.172"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1229,7 +1239,7 @@ dependencies = [
  "esp-println",
  "fusb302b",
  "heapless",
- "mipidsi",
+ "lcd-async",
  "static_cell",
 ]
 
@@ -1284,15 +1294,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dd72e8b4e42274540edabec853f607c015c73436159b06c39c7af85a20433155"
 dependencies = [
  "serde",
-]
-
-[[package]]
-name = "mipidsi"
-version = "0.9.0"
-dependencies = [
- "embedded-graphics",
- "embedded-hal 1.0.0",
- "embedded-hal-async",
 ]
 
 [[package]]

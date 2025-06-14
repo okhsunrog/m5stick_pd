@@ -36,7 +36,7 @@ use esp_hal::{
 };
 use fusb302b::{Fusb302bAsync, FusbError};
 use mipidsi::{
-    Builder, interface::SpiInterface, models::ST7789, options::ColorInversion,
+    Builder, TestImage, interface::SpiInterface, models::ST7789, options::ColorInversion,
     raw_framebuf::RawFrameBuf,
 };
 
@@ -47,14 +47,14 @@ use {esp_backtrace as _, esp_println as _};
 
 extern crate alloc;
 
-const X_OFFSET: u16 = 35;
-const Y_OFFSET: u16 = 20;
-const W_ACTIVE: usize = 135; // 135
-const H_ACTIVE: usize = 240; // 240
+const X_OFFSET: u16 = 52;
+const Y_OFFSET: u16 = 40;
+const W_ACTIVE: u16 = 135; // 135
+const H_ACTIVE: u16 = 240; // 240
 const W: u16 = W_ACTIVE as u16 + X_OFFSET;
 const H: u16 = H_ACTIVE as u16 + Y_OFFSET;
 const PXL_SIZE: usize = 2;
-const FRAME_BYTE_SIZE: usize = W_ACTIVE * H_ACTIVE * PXL_SIZE;
+const FRAME_BYTE_SIZE: u16 = W_ACTIVE * H_ACTIVE * PXL_SIZE as u16;
 
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) {
@@ -130,20 +130,24 @@ async fn main(spawner: Spawner) {
 
     let mut frame: Vec<u8> = Vec::new();
 
-    frame.resize(FRAME_BYTE_SIZE, 0);
+    frame.resize(FRAME_BYTE_SIZE.into(), 0);
     info!("Global heap stats: {}", HEAP.stats());
     {
-        let mut raw_fb =
-            RawFrameBuf::<Rgb565, _, PXL_SIZE>::new(frame.as_mut_slice(), W_ACTIVE, H_ACTIVE);
+        let mut raw_fb = RawFrameBuf::<Rgb565, _>::new(
+            frame.as_mut_slice(),
+            W_ACTIVE as usize,
+            H_ACTIVE as usize,
+        );
         raw_fb.clear(Rgb565::BLACK).unwrap();
-        Text::with_alignment(
-            "Hi ESP!",
-            Point::new(W_ACTIVE as i32 / 2, H_ACTIVE as i32 - 20),
-            MonoTextStyle::new(&FONT_10X20, Rgb565::WHITE),
-            Alignment::Center,
-        )
-        .draw(&mut raw_fb)
-        .unwrap();
+        // Text::with_alignment(
+        //     "lcd-async",
+        //     Point::new(W_ACTIVE as i32 / 2, H_ACTIVE as i32 - 20),
+        //     MonoTextStyle::new(&FONT_10X20, Rgb565::WHITE),
+        //     Alignment::Center,
+        // )
+        // .draw(&mut raw_fb)
+        // .unwrap();
+        TestImage::new().draw(&mut raw_fb).unwrap();
     }
 
     display
