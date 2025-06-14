@@ -25,7 +25,7 @@ embassy-embedded-hal = "0.3.0"
 embassy-time = { version = "0.4.0", features = ["defmt"] }
 embedded-io = { version = "0.6.1", features = ["defmt-03"] }
 embedded-io-async = { version = "0.6.1", features = ["defmt-03"] }
-esp-alloc = { version = "0.8.0", features = ["defmt"] }
+# esp-alloc = { version = "0.8.0", features = ["defmt"] }
 esp-backtrace = { version = "0.16.0", features = [
   "defmt",
   "esp32",
@@ -35,14 +35,14 @@ esp-backtrace = { version = "0.16.0", features = [
 esp-hal-embassy = { version = "0.8.1", features = ["defmt", "esp32"] }
 esp-println = { version = "0.14.0", features = ["defmt-espflash", "esp32"] }
 static_cell = { version = "2.1.0", features = ["nightly"] }
-axp192-dd = { path = "../axp192-dd", features = ["defmt"] }
-fusb302b = { path = "../fusb302b", features = ["defmt"] }
+axp192-dd = { version = "0.2", features = ["defmt"] }
 heapless = { version = "0.8.0", default-features = false, features = ["defmt-03"]}
 embedded-hal-async = "1.0.0"
 embedded-hal = "1.0"
 embedded-graphics = "0.8.1"
-#mipidsi = { path = "../display/mipidsi-fork" }
-mipidsi = { package = "lcd-async", path = "../display/lcd-async" }
+lcd-async = { git = "https://github.com/okhsunrog/lcd-async", rev = "76afd7109bab7070cebebf72bfebfdbd5be421aa"}
+# lcd-async = { path = "../lcd-async" }
+fusb302b = { path = "../fusb302b", features = ["defmt"] }
 
 
 [profile.dev]

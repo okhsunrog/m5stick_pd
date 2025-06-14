@@ -6,8 +6,8 @@
     holding buffers for the duration of a data transfer."
 )]
 
-// use alloc::vec::Vec;
 use axp192_dd::{Axp192Async, AxpError, ChargeCurrentValue, Gpio0FunctionSelect, LdoId};
+use core::fmt::Write;
 use defmt::{error, info};
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
 use embassy_executor::Spawner;
@@ -17,10 +17,8 @@ use embedded_graphics::{
     mono_font::{MonoTextStyle, ascii::FONT_10X20},
     pixelcolor::Rgb565,
     prelude::*,
-    primitives::{PrimitiveStyle, Rectangle},
     text::{Alignment, Text},
 };
-use embedded_hal::digital::OutputPin;
 use esp_hal::{
     Async,
     clock::CpuClock,
@@ -34,25 +32,26 @@ use esp_hal::{
     time::Rate,
     timer::timg::TimerGroup,
 };
-use fusb302b::{Fusb302bAsync, FusbError};
-use mipidsi::{
-    Builder, TestImage, interface::SpiInterface, models::ST7789, options::ColorInversion,
-    raw_framebuf::RawFrameBuf,
+use fusb302b::Fusb302bAsync;
+use heapless::String;
+use lcd_async::{
+    interface::SpiInterface, models::ST7789, TestImage, options::{ColorInversion, Orientation, Rotation}, raw_framebuf::RawFrameBuf, Builder
 };
-
-// use esp_alloc::HEAP;
 use static_cell::StaticCell;
 
 use {esp_backtrace as _, esp_println as _};
 
-// extern crate alloc;
-
-const X_OFFSET: u16 = 52;
+// Uncomment for vertical orientation
+// const X_OFFSET: u16 = 52;
+// const Y_OFFSET: u16 = 40;
+// const W_ACTIVE: u16 = 135;
+// const H_ACTIVE: u16 = 240;
+const X_OFFSET: u16 = 203;
 const Y_OFFSET: u16 = 40;
-const W_ACTIVE: u16 = 135; // 135
-const H_ACTIVE: u16 = 240; // 240
-const W: u16 = W_ACTIVE as u16 + X_OFFSET;
-const H: u16 = H_ACTIVE as u16 + Y_OFFSET;
+const W_ACTIVE: u16 = 240;
+const H_ACTIVE: u16 = 135;
+
+
 const PXL_SIZE: usize = 2;
 const FRAME_BUFFER_SIZE: usize = (W_ACTIVE * H_ACTIVE) as usize * PXL_SIZE;
 static FRAME_BUFFER: StaticCell<[u8; FRAME_BUFFER_SIZE]> = StaticCell::new();
@@ -82,7 +81,7 @@ async fn main(spawner: Spawner) {
         .with_scl(p.GPIO22)
         .into_async();
 
-    init_m5stickc_plus_pmic(i2c1).await.unwrap();
+    let voltage: u32 = init_m5stickc_plus_pmic(i2c1).await.unwrap() as u32;
 
     let (rx_buffer, rx_descriptors, tx_buffer, tx_descriptors) = esp_hal::dma_buffers!(4, 32_000);
     let dma_rx_buf = DmaRxBuf::new(rx_descriptors, rx_buffer).unwrap();
@@ -119,22 +118,26 @@ async fn main(spawner: Spawner) {
     let di = SpiInterface::new(spi_device, dc);
     let mut delay = embassy_time::Delay;
 
-    let mut display = Builder::new(ST7789, di)
+    let mut display = match Builder::new(ST7789, di)
         .reset_pin(res)
         .display_size(W_ACTIVE, H_ACTIVE)
+        .orientation(Orientation{
+            rotation: Rotation::Deg90,
+            mirrored: false,
+        })
         .display_offset(X_OFFSET, Y_OFFSET)
         .invert_colors(ColorInversion::Inverted)
         .init(&mut delay)
-        .await
-        .unwrap();
+        .await {
+            Ok(display) => display,
+            Err(e) => {
+                info!("Error! {}", defmt::Debug2Format(&e));
+                return;
+        },
+    };
     info!("Display initialized!");
 
     let frame_buffer = FRAME_BUFFER.init([0; FRAME_BUFFER_SIZE]);
-
-    // let mut frame: Vec<u8> = Vec::new();
-
-    // frame.resize(FRAME_BYTE_SIZE.into(), 0);
-    // info!("Global heap stats: {}", HEAP.stats());
     {
         let mut raw_fb = RawFrameBuf::<Rgb565, _>::new(
             frame_buffer.as_mut_slice(),
@@ -142,15 +145,17 @@ async fn main(spawner: Spawner) {
             H_ACTIVE as usize,
         );
         raw_fb.clear(Rgb565::BLACK).unwrap();
-        // Text::with_alignment(
-        //     "lcd-async",
-        //     Point::new(W_ACTIVE as i32 / 2, H_ACTIVE as i32 - 20),
-        //     MonoTextStyle::new(&FONT_10X20, Rgb565::WHITE),
-        //     Alignment::Center,
-        // )
-        // .draw(&mut raw_fb)
-        // .unwrap();
-        TestImage::new().draw(&mut raw_fb).unwrap();
+        let mut volt_str: String<30> = String::new();
+        write!(&mut volt_str, "Voltage: {} mV", voltage).unwrap();
+        Text::with_alignment(
+            &volt_str,
+            Point::new(W_ACTIVE as i32 / 2, H_ACTIVE as i32 - 20),
+            MonoTextStyle::new(&FONT_10X20, Rgb565::WHITE),
+            Alignment::Center,
+        )
+        .draw(&mut raw_fb)
+        .unwrap();
+        // TestImage::new().draw(&mut raw_fb).unwrap();
     }
 
     display
@@ -176,7 +181,7 @@ async fn pd_task(i2c: I2c<'static, Async>) {
 }
 
 #[rustfmt::skip]
-async fn init_m5stickc_plus_pmic(i2c: I2c<'_, Async>) -> Result<(), AxpError<I2cError>> {
+async fn init_m5stickc_plus_pmic(i2c: I2c<'_, Async>) -> Result<f32, AxpError<I2cError>> {
     let mut axp = Axp192Async::new(i2c);
     axp.set_ldo_voltage_mv(LdoId::Ldo2, 3300).await?;
     axp.ll.adc_enable_1().write_async(|r| {
@@ -192,20 +197,24 @@ async fn init_m5stickc_plus_pmic(i2c: I2c<'_, Async>) -> Result<(), AxpError<I2c
     axp.ll.gpio_0_control().write_async(|r| {
         r.set_function_select(Gpio0FunctionSelect::LowNoiseLdoOutput);
     }).await?;
+
     axp.ll.power_output_control().modify_async(|r| {
         r.set_dcdc_1_output_enable(true);
         r.set_dcdc_3_output_enable(false);
         r.set_ldo_2_output_enable(true);
         r.set_ldo_3_output_enable(true);
         r.set_dcdc_2_output_enable(false);
-        r.set_exten_output_enable(true);
+        r.set_exten_output_enable(false); // external 5V output
     }).await?;
     axp.set_battery_charge_high_temp_threshold_mv(3226).await?;
     axp.ll.backup_battery_charge_control().write_async(|r| {
         r.set_backup_charge_enable(true);
     }).await?;
 
-    info!("Battery voltage: {} mV", axp.get_battery_voltage_mv().await?);
+    let bat_voltage = axp.get_battery_voltage_mv().await?;
+
+
+    info!("Battery voltage: {} mV", bat_voltage);
     info!("Charge current: {} mA", axp.get_battery_charge_current_ma().await?);
-    Ok(())
+    Ok(bat_voltage)
 }

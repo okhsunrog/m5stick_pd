@@ -15,12 +15,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "allocator-api2"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "78200ac3468a57d333cd0ea5dd398e25111194dcacd49208afca95c629a6311d"
-
-[[package]]
 name = "android-tzdata"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -93,6 +87,8 @@ checksum = "ace50bade8e6234aa140d9a2f552bbee1db4d353f69b8217bc503490fc1a9f26"
 [[package]]
 name = "axp192-dd"
 version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d8bc5b815bcbe8570a1de349a4c6eecbdb32f7a666a3eb53fc0941442c9de2e0"
 dependencies = [
  "bisync",
  "defmt 1.0.1",
@@ -669,21 +665,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
-name = "esp-alloc"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e95f1de57ce5a6600368f3d3c931b0dfe00501661e96f5ab83bc5cdee031784"
-dependencies = [
- "allocator-api2",
- "cfg-if",
- "critical-section",
- "defmt 1.0.1",
- "document-features",
- "enumset",
- "linked_list_allocator",
-]
-
-[[package]]
 name = "esp-backtrace"
 version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1181,6 +1162,7 @@ dependencies = [
 [[package]]
 name = "lcd-async"
 version = "0.1.0"
+source = "git+https://github.com/okhsunrog/lcd-async?rev=76afd7109bab7070cebebf72bfebfdbd5be421aa#76afd7109bab7070cebebf72bfebfdbd5be421aa"
 dependencies = [
  "embedded-graphics",
  "embedded-graphics-core",
@@ -1193,12 +1175,6 @@ name = "libc"
 version = "0.2.172"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d750af042f7ef4f724306de029d18836c26c1765a54a6a3f094cbd23a7267ffa"
-
-[[package]]
-name = "linked_list_allocator"
-version = "0.10.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9afa463f5405ee81cdb9cc2baf37e08ec7e4c8209442b5d72c04cfb2cd6e6286"
 
 [[package]]
 name = "litrs"
@@ -1231,7 +1207,6 @@ dependencies = [
  "embedded-hal-async",
  "embedded-io",
  "embedded-io-async",
- "esp-alloc",
  "esp-backtrace",
  "esp-bootloader-esp-idf",
  "esp-hal",
