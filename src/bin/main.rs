@@ -35,7 +35,11 @@ use esp_hal::{
 use fusb302b::Fusb302bAsync;
 use heapless::String;
 use lcd_async::{
-    interface::SpiInterface, models::ST7789, TestImage, options::{ColorInversion, Orientation, Rotation}, raw_framebuf::RawFrameBuf, Builder
+    Builder, TestImage,
+    interface::SpiInterface,
+    models::ST7789,
+    options::{ColorInversion, Orientation, Rotation},
+    raw_framebuf::RawFrameBuf,
 };
 use static_cell::StaticCell;
 
@@ -48,12 +52,11 @@ use {esp_backtrace as _, esp_println as _};
 // const H_ACTIVE: u16 = 240;
 const X_OFFSET: u16 = 203;
 const Y_OFFSET: u16 = 40;
-const W_ACTIVE: u16 = 240;
-const H_ACTIVE: u16 = 135;
-
+const WIDTH: u16 = 240;
+const HEIGHT: u16 = 135;
 
 const PXL_SIZE: usize = 2;
-const FRAME_BUFFER_SIZE: usize = (W_ACTIVE * H_ACTIVE) as usize * PXL_SIZE;
+const FRAME_BUFFER_SIZE: usize = (WIDTH * HEIGHT) as usize * PXL_SIZE;
 static FRAME_BUFFER: StaticCell<[u8; FRAME_BUFFER_SIZE]> = StaticCell::new();
 
 #[esp_hal_embassy::main]
@@ -120,20 +123,21 @@ async fn main(spawner: Spawner) {
 
     let mut display = match Builder::new(ST7789, di)
         .reset_pin(res)
-        .display_size(W_ACTIVE, H_ACTIVE)
-        .orientation(Orientation{
+        .display_size(WIDTH, HEIGHT)
+        .orientation(Orientation {
             rotation: Rotation::Deg90,
             mirrored: false,
         })
         .display_offset(X_OFFSET, Y_OFFSET)
         .invert_colors(ColorInversion::Inverted)
         .init(&mut delay)
-        .await {
-            Ok(display) => display,
-            Err(e) => {
-                info!("Error! {}", defmt::Debug2Format(&e));
-                return;
-        },
+        .await
+    {
+        Ok(display) => display,
+        Err(e) => {
+            info!("Error! {}", defmt::Debug2Format(&e));
+            return;
+        }
     };
     info!("Display initialized!");
 
@@ -141,25 +145,24 @@ async fn main(spawner: Spawner) {
     {
         let mut raw_fb = RawFrameBuf::<Rgb565, _>::new(
             frame_buffer.as_mut_slice(),
-            W_ACTIVE as usize,
-            H_ACTIVE as usize,
+            WIDTH as usize,
+            HEIGHT as usize,
         );
         raw_fb.clear(Rgb565::BLACK).unwrap();
         let mut volt_str: String<30> = String::new();
         write!(&mut volt_str, "Voltage: {} mV", voltage).unwrap();
-        Text::with_alignment(
+        Text::new(
             &volt_str,
-            Point::new(W_ACTIVE as i32 / 2, H_ACTIVE as i32 - 20),
-            MonoTextStyle::new(&FONT_10X20, Rgb565::WHITE),
-            Alignment::Center,
+            Point::new(0, 20),
+            MonoTextStyle::new(&FONT_10X20, Rgb565::GREEN),
         )
         .draw(&mut raw_fb)
         .unwrap();
-        // TestImage::new().draw(&mut raw_fb).unwrap();
+        //TestImage::new().draw(&mut raw_fb).unwrap();
     }
 
     display
-        .show_raw_data(0, 0, W_ACTIVE, H_ACTIVE, frame_buffer)
+        .show_raw_data(0, 0, WIDTH, HEIGHT, frame_buffer)
         .await
         .unwrap();
 
