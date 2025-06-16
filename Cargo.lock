@@ -958,10 +958,9 @@ checksum = "e6d5a32815ae3f33302d95fdcb2ce17862f8c65363dcfd29360480ba1001fc9c"
 name = "fusb302b"
 version = "0.0.1"
 dependencies = [
- "bisync",
  "defmt 1.0.1",
  "device-driver",
- "embedded-hal 1.0.0",
+ "embassy-time",
  "embedded-hal-async",
  "thiserror 2.0.12",
  "usbpd-traits",
@@ -1762,9 +1761,9 @@ checksum = "7dd6e30e90baa6f72411720665d41d89b9a3d039dc45b8faea1ddd07f617f6af"
 
 [[package]]
 name = "usbpd-traits"
-version = "1.0.0"
+version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cafa512c8b7628f48a9ec2649d6346c745ec3d059cc5b2069df57c2fde23d1d5"
+checksum = "232c39f321d84f331a2741f128537c658caff9b57a9291c2da8953997b698e42"
 
 [[package]]
 name = "vcell"

@@ -32,7 +32,7 @@ use esp_hal::{
     time::Rate,
     timer::timg::TimerGroup,
 };
-use fusb302b::Fusb302bAsync;
+use fusb302b::Fusb302b;
 use heapless::String;
 use lcd_async::{
     Builder, TestImage,
@@ -176,7 +176,7 @@ async fn main(spawner: Spawner) {
 
 #[embassy_executor::task]
 async fn pd_task(i2c: I2c<'static, Async>) {
-    let mut fusb = Fusb302bAsync::new(i2c);
+    let mut fusb = Fusb302b::new_and_init(i2c).await.unwrap();
     match fusb.ll.device_id().read_async().await {
         Ok(device_id) => info!("FUSB302B device ID: {}", device_id),
         Err(e) => error!("Failed to read device ID: {:?}", e),
@@ -187,14 +187,6 @@ async fn pd_task(i2c: I2c<'static, Async>) {
 async fn init_m5stickc_plus_pmic(i2c: I2c<'_, Async>) -> Result<f32, AxpError<I2cError>> {
     let mut axp = Axp192Async::new(i2c);
     axp.set_ldo_voltage_mv(LdoId::Ldo2, 3300).await?;
-    axp.ll.adc_enable_1().write_async(|r| {
-        r.set_battery_current_adc_enable(true);
-        r.set_acin_voltage_adc_enable(true);
-        r.set_acin_current_adc_enable(true);
-        r.set_vbus_voltage_adc_enable(true);
-        r.set_vbus_current_adc_enable(true);
-        r.set_aps_voltage_adc_enable(true);
-    }).await?;
     axp.ll.charge_control_1().write_async(|r| r.set_charge_current(ChargeCurrentValue::Ma100)).await?;
     axp.set_gpio0_ldo_voltage_mv(3300).await?;
     axp.ll.gpio_0_control().write_async(|r| {
@@ -213,6 +205,17 @@ async fn init_m5stickc_plus_pmic(i2c: I2c<'_, Async>) -> Result<f32, AxpError<I2
     axp.ll.backup_battery_charge_control().write_async(|r| {
         r.set_backup_charge_enable(true);
     }).await?;
+        Timer::after(Duration::from_secs(1)).await;
+
+    axp.ll.adc_enable_1().write_async(|r| {
+        r.set_battery_current_adc_enable(true);
+        r.set_acin_voltage_adc_enable(true);
+        r.set_acin_current_adc_enable(true);
+        r.set_vbus_voltage_adc_enable(true);
+        r.set_vbus_current_adc_enable(true);
+        r.set_aps_voltage_adc_enable(true);
+    }).await?;
+    Timer::after(Duration::from_secs(1)).await;
 
     let bat_voltage = axp.get_battery_voltage_mv().await?;
 
