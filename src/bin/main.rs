@@ -50,7 +50,7 @@ use static_cell::StaticCell;
 use usbpd::{
     protocol_layer::message::{
         pdo::{Augmented, PowerDataObject, SourceCapabilities},
-        request::{self, PowerSource}
+        request::{self, PowerSource},
     },
     sink::{
         device_policy_manager::{DevicePolicyManager, Event},
@@ -154,6 +154,7 @@ async fn main(spawner: Spawner) {
 
     let _voltage: u32 = init_m5stickc_plus_pmic(i2c1).await.unwrap() as u32;
 
+    #[allow(clippy::manual_div_ceil)]
     let (rx_buffer, rx_descriptors, tx_buffer, tx_descriptors) = esp_hal::dma_buffers!(4, 32_000);
     let dma_rx_buf = DmaRxBuf::new(rx_descriptors, rx_buffer).unwrap();
     let dma_tx_buf = DmaTxBuf::new(tx_descriptors, tx_buffer).unwrap();
