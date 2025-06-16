@@ -176,7 +176,7 @@ async fn main(spawner: Spawner) {
 
 #[embassy_executor::task]
 async fn pd_task(i2c: I2c<'static, Async>) {
-    let mut fusb = Fusb302b::new_and_init(i2c).await.unwrap();
+    let mut fusb = Fusb302b::init(i2c).await.unwrap();
     match fusb.ll.device_id().read_async().await {
         Ok(device_id) => info!("FUSB302B device ID: {}", device_id),
         Err(e) => error!("Failed to read device ID: {:?}", e),
