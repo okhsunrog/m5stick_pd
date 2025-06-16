@@ -11,7 +11,7 @@ use core::fmt::Write;
 use defmt::{error, info};
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
 use embassy_executor::Spawner;
-use embassy_sync::{blocking_mutex::raw::NoopRawMutex, mutex::Mutex};
+use embassy_sync::{blocking_mutex::raw::NoopRawMutex, channel::Channel, mutex::Mutex};
 use embassy_time::{Duration, Timer};
 use embedded_graphics::{
     mono_font::{MonoTextStyle, ascii::FONT_10X20},
@@ -42,6 +42,19 @@ use lcd_async::{
     raw_framebuf::RawFrameBuf,
 };
 use static_cell::StaticCell;
+use uom::si::electric_potential;
+use usbpd::{
+    protocol_layer::message::{
+        pdo::{Augmented, PowerDataObject, SourceCapabilities},
+        request::{self, CurrentRequest, PowerSource, VoltageRequest},
+        units::ElectricPotential,
+    },
+    sink::{
+        device_policy_manager::{DevicePolicyManager, Event},
+        policy_engine::Sink,
+    },
+    timers::Timer as PdTimer,
+};
 
 use {esp_backtrace as _, esp_println as _};
 
@@ -58,6 +71,68 @@ const HEIGHT: u16 = 135;
 const PXL_SIZE: usize = 2;
 const FRAME_BUFFER_SIZE: usize = (WIDTH * HEIGHT) as usize * PXL_SIZE;
 static FRAME_BUFFER: StaticCell<[u8; FRAME_BUFFER_SIZE]> = StaticCell::new();
+
+// --- Shared State using Embassy Channel ---
+// This channel will be used to send source capabilities from the PD task to the display task.
+// A capacity of 1 is sufficient, as we only care about the most recent update.
+// static CAPABILITIES_CHANNEL: Channel<NoopRawMutex, SourceCapabilities, 1> = Channel::new();
+
+struct AppTimer;
+impl PdTimer for AppTimer {
+    async fn after_millis(milliseconds: u64) {
+        Timer::after(Duration::from_millis(milliseconds)).await;
+    }
+}
+
+// 2. Implement your device's policy.
+// This struct will now hold a reference to the communication channel.
+struct MyDevicePolicyManager {
+    channel: &'static Channel<NoopRawMutex, SourceCapabilities, 1>,
+}
+
+impl DevicePolicyManager for MyDevicePolicyManager {
+    // This function is called by the policy engine when it receives capabilities.
+    async fn request(&mut self, source_capabilities: &SourceCapabilities) -> PowerSource {
+        info!(
+            "Source capabilities received: {}",
+            source_capabilities.pdos()
+        );
+
+        // Send the received capabilities to the display task.
+        // try_send is non-blocking and will overwrite the old value if the channel is full,
+        // which is perfect for displaying the latest state.
+        self.channel.try_send(source_capabilities.clone()).ok();
+
+        if let Ok(request) = request::PowerSource::new_fixed(
+            request::CurrentRequest::Highest,
+            VoltageRequest::Specific(ElectricPotential::new::<electric_potential::volt>(9)),
+            source_capabilities,
+        ) {
+            info!("Requesting 9V");
+            request
+        } else {
+            info!("9V not available, requesting 5V as fallback.");
+            request::PowerSource::new_fixed(
+                request::CurrentRequest::Highest,
+                request::VoltageRequest::Safe5V,
+                source_capabilities,
+            )
+            .unwrap() // Requesting 5V from a valid source should never fail.
+        }
+    }
+
+    // This function is called after a new power contract is successfully established.
+    async fn transition_power(&mut self, accepted: &PowerSource) {
+        info!("Power transition accepted: {}", accepted);
+        // In a real application, you might enable a high-power circuit here.
+    }
+
+    // This function can be used to send events from the application to the policy engine.
+    async fn get_event(&mut self, _source_capabilities: &SourceCapabilities) -> Event {
+        // This future never resolves, so we won't send any events.
+        core::future::pending().await
+    }
+}
 
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) {
