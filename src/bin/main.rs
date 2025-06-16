@@ -11,7 +11,11 @@ use core::fmt::Write;
 use defmt::{error, info};
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
 use embassy_executor::Spawner;
-use embassy_sync::{blocking_mutex::raw::NoopRawMutex, channel::Channel, mutex::Mutex};
+use embassy_sync::{
+    blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex},
+    channel::{self, Channel},
+    mutex::Mutex,
+};
 use embassy_time::{Duration, Timer};
 use embedded_graphics::{
     mono_font::{MonoTextStyle, ascii::FONT_10X20},
@@ -19,6 +23,7 @@ use embedded_graphics::{
     prelude::*,
     text::{Alignment, Text},
 };
+use embedded_hal::digital::OutputPin;
 use esp_hal::{
     Async,
     clock::CpuClock,
@@ -35,8 +40,8 @@ use esp_hal::{
 use fusb302b::Fusb302b;
 use heapless::String;
 use lcd_async::{
-    Builder, TestImage,
-    interface::SpiInterface,
+    Builder, Display, TestImage, interface,
+    models::Model,
     models::ST7789,
     options::{ColorInversion, Orientation, Rotation},
     raw_framebuf::RawFrameBuf,
@@ -74,8 +79,8 @@ static FRAME_BUFFER: StaticCell<[u8; FRAME_BUFFER_SIZE]> = StaticCell::new();
 
 // --- Shared State using Embassy Channel ---
 // This channel will be used to send source capabilities from the PD task to the display task.
-// A capacity of 1 is sufficient, as we only care about the most recent update.
-// static CAPABILITIES_CHANNEL: Channel<NoopRawMutex, SourceCapabilities, 1> = Channel::new();
+static CAPABILITIES_CHANNEL: Channel<CriticalSectionRawMutex, SourceCapabilities, 3> =
+    Channel::new();
 
 struct AppTimer;
 impl PdTimer for AppTimer {
@@ -87,7 +92,7 @@ impl PdTimer for AppTimer {
 // 2. Implement your device's policy.
 // This struct will now hold a reference to the communication channel.
 struct MyDevicePolicyManager {
-    channel: &'static Channel<NoopRawMutex, SourceCapabilities, 1>,
+    channel: &'static Channel<CriticalSectionRawMutex, SourceCapabilities, 3>,
 }
 
 impl DevicePolicyManager for MyDevicePolicyManager {
@@ -193,10 +198,10 @@ async fn main(spawner: Spawner) {
     let spi_bus = SPI_BUS.init(spi_bus);
     let spi_device = SpiDevice::new(spi_bus, cs);
 
-    let di = SpiInterface::new(spi_device, dc);
+    let di = interface::SpiInterface::new(spi_device, dc);
     let mut delay = embassy_time::Delay;
 
-    let mut display = match Builder::new(ST7789, di)
+    let display = Builder::new(ST7789, di)
         .reset_pin(res)
         .display_size(WIDTH, HEIGHT)
         .orientation(Orientation {
@@ -207,55 +212,163 @@ async fn main(spawner: Spawner) {
         .invert_colors(ColorInversion::Inverted)
         .init(&mut delay)
         .await
-    {
-        Ok(display) => display,
-        Err(e) => {
-            info!("Error! {}", defmt::Debug2Format(&e));
-            return;
-        }
-    };
+        .unwrap();
     info!("Display initialized!");
 
-    let frame_buffer = FRAME_BUFFER.init([0; FRAME_BUFFER_SIZE]);
-    {
-        let mut raw_fb = RawFrameBuf::<Rgb565, _>::new(
-            frame_buffer.as_mut_slice(),
-            WIDTH as usize,
-            HEIGHT as usize,
-        );
-        raw_fb.clear(Rgb565::BLACK).unwrap();
-        let mut volt_str: String<30> = String::new();
-        write!(&mut volt_str, "Voltage: {} mV", voltage).unwrap();
-        Text::new(
-            &volt_str,
-            Point::new(0, 20),
-            MonoTextStyle::new(&FONT_10X20, Rgb565::GREEN),
-        )
-        .draw(&mut raw_fb)
-        .unwrap();
-        //TestImage::new().draw(&mut raw_fb).unwrap();
-    }
+    spawner.must_spawn(pd_task(i2c0, &CAPABILITIES_CHANNEL));
 
-    display
-        .show_raw_data(0, 0, WIDTH, HEIGHT, frame_buffer)
-        .await
-        .unwrap();
+    display_task(display, &CAPABILITIES_CHANNEL).await;
+}
 
-    spawner.must_spawn(pd_task(i2c0));
-
+async fn display_task<DI, M, RST>(
+    mut display: Display<DI, M, RST>,
+    channel: &'static Channel<CriticalSectionRawMutex, SourceCapabilities, 3>,
+) where
+    DI: interface::Interface<Word = u8>,
+    M: Model,
+    RST: OutputPin,
+{
+    // --- Main Display Loop ---
     loop {
-        //info!("Hello world!");
-        Timer::after(Duration::from_secs(1)).await;
+        let mut y_pos = 20;
+        let text_style = MonoTextStyle::new(&FONT_10X20, Rgb565::WHITE);
+
+        let frame_buffer = FRAME_BUFFER.init([0; FRAME_BUFFER_SIZE]);
+        {
+            let mut raw_fb = RawFrameBuf::<Rgb565, _>::new(
+                frame_buffer.as_mut_slice(),
+                WIDTH.into(),
+                HEIGHT.into(),
+            );
+            raw_fb.clear(Rgb565::BLACK).unwrap();
+
+            // Draw "Waiting..." message initially, then wait for the first real data
+            Text::new("Waiting for source...", Point::new(5, y_pos), text_style)
+                .draw(&mut raw_fb)
+                .unwrap();
+        }
+
+        display
+            .show_raw_data(0, 0, WIDTH, HEIGHT, frame_buffer)
+            .await
+            .unwrap();
+
+        // Block here until new capabilities are sent from the pd_task
+        let caps = channel.receive().await;
+        {
+            let mut raw_fb = RawFrameBuf::<Rgb565, _>::new(
+                frame_buffer.as_mut_slice(),
+                WIDTH.into(),
+                HEIGHT.into(),
+            );
+            // Clear the buffer again to draw the new data
+            raw_fb.clear(Rgb565::BLACK).unwrap();
+            y_pos = 20;
+
+            Text::new("Source PDOs:", Point::new(5, y_pos), text_style)
+                .draw(&mut raw_fb)
+                .unwrap();
+            y_pos += 20;
+
+            for pdo in caps.pdos().iter() {
+                let mut pdo_str: String<64> = String::new();
+                if write_pdo_to_string(pdo, &mut pdo_str).is_ok() {
+                    Text::new(&pdo_str, Point::new(5, y_pos), text_style)
+                        .draw(&mut raw_fb)
+                        .unwrap();
+                    y_pos += 15;
+                }
+            }
+        }
+        // Push the final rendered frame to the display
+        display
+            .show_raw_data(0, 0, WIDTH, HEIGHT, frame_buffer)
+            .await
+            .unwrap();
+    }
+}
+
+// Helper function to format a PowerDataObject for display
+fn write_pdo_to_string(pdo: &PowerDataObject, s: &mut String<64>) -> core::fmt::Result {
+    match pdo {
+        PowerDataObject::FixedSupply(f) => {
+            write!(
+                s,
+                "FIXED: {}mV {}mA",
+                f.voltage().get::<uom::si::electric_potential::millivolt>(),
+                f.max_current()
+                    .get::<uom::si::electric_current::milliampere>()
+            )
+        }
+        PowerDataObject::VariableSupply(v) => {
+            write!(
+                s,
+                "VAR: {}-{}mV {}mA",
+                v.min_voltage()
+                    .get::<uom::si::electric_potential::millivolt>(),
+                v.max_voltage()
+                    .get::<uom::si::electric_potential::millivolt>(),
+                v.max_current()
+                    .get::<uom::si::electric_current::milliampere>()
+            )
+        }
+        PowerDataObject::Battery(b) => {
+            write!(
+                s,
+                "BATT: {}-{}mV {}mW",
+                b.min_voltage()
+                    .get::<uom::si::electric_potential::millivolt>(),
+                b.max_voltage()
+                    .get::<uom::si::electric_potential::millivolt>(),
+                b.max_power().get::<uom::si::power::milliwatt>()
+            )
+        }
+        PowerDataObject::Augmented(a) => match a {
+            Augmented::Spr(pps) => {
+                write!(
+                    s,
+                    "PPS: {}-{}mV {}mA",
+                    pps.min_voltage()
+                        .get::<uom::si::electric_potential::millivolt>(),
+                    pps.max_voltage()
+                        .get::<uom::si::electric_potential::millivolt>(),
+                    pps.max_current()
+                        .get::<uom::si::electric_current::milliampere>()
+                )
+            }
+            _ => write!(s, "Augmented PDO (EPR?)"),
+        },
+        _ => write!(s, "Unknown PDO"),
     }
 }
 
 #[embassy_executor::task]
-async fn pd_task(i2c: I2c<'static, Async>) {
-    let mut fusb = Fusb302b::init(i2c).await.unwrap();
-    match fusb.ll.device_id().read_async().await {
-        Ok(device_id) => info!("FUSB302B device ID: {}", device_id),
-        Err(e) => error!("Failed to read device ID: {:?}", e),
+async fn pd_task(
+    i2c: I2c<'static, Async>,
+    channel: &'static Channel<CriticalSectionRawMutex, SourceCapabilities, 3>,
+) {
+    // 3. Instantiate your FUSB302B driver
+    let fusb_driver = match Fusb302b::init(i2c).await {
+        Ok(driver) => driver,
+        Err(e) => {
+            error!("Failed to initialize FUSB302B: {:?}", e);
+            return;
+        }
     };
+    info!("FUSB302B Initialized!");
+
+    // 4. Instantiate your application's policy manager, passing the channel
+    let dpm = MyDevicePolicyManager { channel };
+
+    // 5. Instantiate the policy engine with your driver, timer, and DPM
+    let mut policy_engine = Sink::<_, AppTimer, _>::new(fusb_driver, dpm);
+
+    info!("Starting USB-PD Policy Engine...");
+
+    // 6. Run the policy engine forever
+    if let Err(e) = policy_engine.run().await {
+        error!("Policy engine exited with error: {:?}", e);
+    }
 }
 
 #[rustfmt::skip]
