@@ -13,7 +13,7 @@ use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
 use embassy_executor::Spawner;
 use embassy_sync::{
     blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex},
-    channel::{self, Channel},
+    channel::Channel,
     mutex::Mutex,
 };
 use embassy_time::{Duration, Timer};
@@ -21,7 +21,7 @@ use embedded_graphics::{
     mono_font::{MonoTextStyle, ascii::FONT_10X20},
     pixelcolor::Rgb565,
     prelude::*,
-    text::{Alignment, Text},
+    text::Text,
 };
 use embedded_hal::digital::OutputPin;
 use esp_hal::{
@@ -40,19 +40,17 @@ use esp_hal::{
 use fusb302b::Fusb302b;
 use heapless::String;
 use lcd_async::{
-    Builder, Display, TestImage, interface,
+    Builder, Display, interface,
     models::Model,
     models::ST7789,
     options::{ColorInversion, Orientation, Rotation},
     raw_framebuf::RawFrameBuf,
 };
 use static_cell::StaticCell;
-use uom::si::electric_potential;
 use usbpd::{
     protocol_layer::message::{
         pdo::{Augmented, PowerDataObject, SourceCapabilities},
-        request::{self, CurrentRequest, PowerSource, VoltageRequest},
-        units::ElectricPotential,
+        request::{self, PowerSource}
     },
     sink::{
         device_policy_manager::{DevicePolicyManager, Event},
@@ -108,22 +106,12 @@ impl DevicePolicyManager for MyDevicePolicyManager {
         // which is perfect for displaying the latest state.
         self.channel.try_send(source_capabilities.clone()).ok();
 
-        if let Ok(request) = request::PowerSource::new_fixed(
+        request::PowerSource::new_fixed(
             request::CurrentRequest::Highest,
-            VoltageRequest::Specific(ElectricPotential::new::<electric_potential::volt>(9)),
+            request::VoltageRequest::Safe5V,
             source_capabilities,
-        ) {
-            info!("Requesting 9V");
-            request
-        } else {
-            info!("9V not available, requesting 5V as fallback.");
-            request::PowerSource::new_fixed(
-                request::CurrentRequest::Highest,
-                request::VoltageRequest::Safe5V,
-                source_capabilities,
-            )
-            .unwrap() // Requesting 5V from a valid source should never fail.
-        }
+        )
+        .unwrap()
     }
 
     // This function is called after a new power contract is successfully established.
@@ -149,7 +137,7 @@ async fn main(spawner: Spawner) {
     esp_hal_embassy::init(timer0.timer0);
 
     info!("Embassy initialized!");
-    let int_fusb_pin = p.GPIO0;
+    let _int_fusb_pin = p.GPIO0;
     let config_i2c0: I2cConfig = I2cConfig::default().with_frequency(Rate::from_khz(100));
     let config_i2c1: I2cConfig = I2cConfig::default().with_frequency(Rate::from_khz(400));
     let i2c0 = I2c::new(p.I2C0, config_i2c0)
@@ -164,7 +152,7 @@ async fn main(spawner: Spawner) {
         .with_scl(p.GPIO22)
         .into_async();
 
-    let voltage: u32 = init_m5stickc_plus_pmic(i2c1).await.unwrap() as u32;
+    let _voltage: u32 = init_m5stickc_plus_pmic(i2c1).await.unwrap() as u32;
 
     let (rx_buffer, rx_descriptors, tx_buffer, tx_descriptors) = esp_hal::dma_buffers!(4, 32_000);
     let dma_rx_buf = DmaRxBuf::new(rx_descriptors, rx_buffer).unwrap();
@@ -219,7 +207,6 @@ async fn main(spawner: Spawner) {
 
     display_task(display, &CAPABILITIES_CHANNEL).await;
 }
-
 async fn display_task<DI, M, RST>(
     mut display: Display<DI, M, RST>,
     channel: &'static Channel<CriticalSectionRawMutex, SourceCapabilities, 3>,
@@ -228,43 +215,41 @@ async fn display_task<DI, M, RST>(
     M: Model,
     RST: OutputPin,
 {
+    // Initialize the frame buffer ONCE.
     let frame_buffer = FRAME_BUFFER.init([0; FRAME_BUFFER_SIZE]);
+    let text_style = MonoTextStyle::new(&FONT_10X20, Rgb565::WHITE);
 
-    loop {
-        let mut y_pos = 20;
-        let text_style = MonoTextStyle::new(&FONT_10X20, Rgb565::WHITE);
-
-        {
-            let mut raw_fb = RawFrameBuf::<Rgb565, _>::new(
-                frame_buffer.as_mut_slice(),
-                WIDTH.into(),
-                HEIGHT.into(),
-            );
-            raw_fb.clear(Rgb565::BLACK).unwrap();
-
-            // Draw "Waiting..." message initially, then wait for the first real data
-            Text::new("Waiting for source...", Point::new(5, y_pos), text_style)
-                .draw(&mut raw_fb)
-                .unwrap();
-        }
-
-        display
-            .show_raw_data(0, 0, WIDTH, HEIGHT, frame_buffer)
-            .await
+    // --- Show the "Waiting" screen just once, BEFORE the main loop ---
+    {
+        let mut raw_fb =
+            RawFrameBuf::<Rgb565, _>::new(frame_buffer.as_mut_slice(), WIDTH.into(), HEIGHT.into());
+        raw_fb.clear(Rgb565::BLACK).unwrap();
+        Text::new("Waiting for source...", Point::new(5, 20), text_style)
+            .draw(&mut raw_fb)
             .unwrap();
+    }
+    display
+        .show_raw_data(0, 0, WIDTH, HEIGHT, frame_buffer)
+        .await
+        .unwrap();
 
-        // Block here until new capabilities are sent from the pd_task
+    // --- Main Update Loop ---
+    // This loop will now only run when new data is received.
+    loop {
+        // Block here until new capabilities are sent from the pd_task.
+        // This is the new "waiting" state.
         let caps = channel.receive().await;
+
+        // When we receive data, we update the screen.
         {
             let mut raw_fb = RawFrameBuf::<Rgb565, _>::new(
                 frame_buffer.as_mut_slice(),
                 WIDTH.into(),
                 HEIGHT.into(),
             );
-            // Clear the buffer again to draw the new data
             raw_fb.clear(Rgb565::BLACK).unwrap();
-            y_pos = 20;
 
+            let mut y_pos = 20;
             Text::new("Source PDOs:", Point::new(5, y_pos), text_style)
                 .draw(&mut raw_fb)
                 .unwrap();
@@ -285,6 +270,9 @@ async fn display_task<DI, M, RST>(
             .show_raw_data(0, 0, WIDTH, HEIGHT, frame_buffer)
             .await
             .unwrap();
+
+        // The loop will now return to the top and wait at `channel.receive().await`
+        // for the *next* time a source is connected. The PDO list will remain on screen.
     }
 }
 

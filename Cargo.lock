@@ -957,6 +957,7 @@ checksum = "e6d5a32815ae3f33302d95fdcb2ce17862f8c65363dcfd29360480ba1001fc9c"
 [[package]]
 name = "fusb302b"
 version = "0.0.1"
+source = "git+https://github.com/okhsunrog/fusb302b?rev=e35ac464d9ad84bb093aee2c2f210777dfd0ea4f#e35ac464d9ad84bb093aee2c2f210777dfd0ea4f"
 dependencies = [
  "defmt 1.0.1",
  "device-driver",
