@@ -228,12 +228,12 @@ async fn display_task<DI, M, RST>(
     M: Model,
     RST: OutputPin,
 {
-    // --- Main Display Loop ---
+    let frame_buffer = FRAME_BUFFER.init([0; FRAME_BUFFER_SIZE]);
+
     loop {
         let mut y_pos = 20;
         let text_style = MonoTextStyle::new(&FONT_10X20, Rgb565::WHITE);
 
-        let frame_buffer = FRAME_BUFFER.init([0; FRAME_BUFFER_SIZE]);
         {
             let mut raw_fb = RawFrameBuf::<Rgb565, _>::new(
                 frame_buffer.as_mut_slice(),
