@@ -35,15 +35,15 @@ esp-backtrace = { version = "0.16.0", features = [
 esp-hal-embassy = { version = "0.8.1", features = ["defmt", "esp32"] }
 esp-println = { version = "0.14.0", features = ["defmt-espflash", "esp32"] }
 static_cell = { version = "2.1.0", features = ["nightly"] }
-axp192-dd = { version = "0.2", features = ["defmt"] }
+axp192-dd = { version = "0.3", features = ["defmt"] }
 heapless = { version = "0.8.0", default-features = false, features = ["defmt-03"]}
 embedded-hal-async = "1.0.0"
 embedded-hal = "1.0"
 embedded-graphics = "0.8.1"
 lcd-async = { git = "https://github.com/okhsunrog/lcd-async", rev = "76afd7109bab7070cebebf72bfebfdbd5be421aa"}
 # lcd-async = { path = "../lcd-async" }
-fusb302b = { git = "https://github.com/okhsunrog/fusb302b", rev = "e35ac464d9ad84bb093aee2c2f210777dfd0ea4f", features = ["defmt"] }
-usbpd = { version = "1.0.1", features = ["defmt"] }
+fusb302b = { git = "https://github.com/okhsunrog/fusb302b", features = ["defmt"] }
+usbpd = { git = "https://github.com/okhsunrog/usbpd.git", branch = "feature/driver-auto-retry-support", features = ["defmt"] }
 uom = { version = "0.36.0", default-features = false, features = ["si", "u32"] }
 
 [profile.dev]

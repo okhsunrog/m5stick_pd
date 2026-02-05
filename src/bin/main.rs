@@ -48,9 +48,9 @@ use lcd_async::{
 };
 use static_cell::StaticCell;
 use usbpd::{
-    protocol_layer::message::{
-        pdo::{Augmented, PowerDataObject, SourceCapabilities},
+    protocol_layer::message::data::{
         request::{self, PowerSource},
+        source_capabilities::{Augmented, PowerDataObject, SourceCapabilities},
     },
     sink::{
         device_policy_manager::{DevicePolicyManager, Event},
@@ -239,7 +239,7 @@ async fn display_task<DI, M, RST>(
     loop {
         // Block here until new capabilities are sent from the pd_task.
         // This is the new "waiting" state.
-        let caps = channel.receive().await;
+        let caps: SourceCapabilities = channel.receive().await;
 
         // When we receive data, we update the screen.
         {
