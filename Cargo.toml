@@ -43,7 +43,7 @@ embedded-graphics = "0.8.1"
 lcd-async = { git = "https://github.com/okhsunrog/lcd-async", rev = "76afd7109bab7070cebebf72bfebfdbd5be421aa"}
 # lcd-async = { path = "../lcd-async" }
 fusb302b = { git = "https://github.com/okhsunrog/fusb302b", features = ["defmt"] }
-usbpd = { git = "https://github.com/okhsunrog/usbpd.git", branch = "feature/driver-auto-retry-support", features = ["defmt"] }
+usbpd = { git = "https://github.com/elagil/usbpd.git", branch = "main", features = ["defmt"] }
 uom = { version = "0.36.0", default-features = false, features = ["si", "u32"] }
 
 [profile.dev]

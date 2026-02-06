@@ -1066,7 +1066,7 @@ checksum = "e6d5a32815ae3f33302d95fdcb2ce17862f8c65363dcfd29360480ba1001fc9c"
 [[package]]
 name = "fusb302b"
 version = "0.0.1"
-source = "git+https://github.com/okhsunrog/fusb302b#c50dbfde85274756affca15baa9005722f431638"
+source = "git+https://github.com/okhsunrog/fusb302b#28c67e640cfdb5abcddb20564a8b8e43e97736f2"
 dependencies = [
  "defmt 1.0.1",
  "device-driver",
@@ -1933,7 +1933,7 @@ dependencies = [
 [[package]]
 name = "usbpd"
 version = "2.0.0"
-source = "git+https://github.com/okhsunrog/usbpd.git?branch=feature%2Fdriver-auto-retry-support#b7c9e19da46e459368306eb173951b0c6a42f459"
+source = "git+https://github.com/elagil/usbpd.git?branch=main#32ae2640c4150a9819a9b48144fc7c14f874eff8"
 dependencies = [
  "byteorder",
  "defmt 1.0.1",
@@ -1948,7 +1948,7 @@ dependencies = [
 [[package]]
 name = "usbpd-traits"
 version = "1.1.0"
-source = "git+https://github.com/okhsunrog/usbpd.git?branch=feature%2Fdriver-auto-retry-support#b7c9e19da46e459368306eb173951b0c6a42f459"
+source = "git+https://github.com/elagil/usbpd.git?branch=main#32ae2640c4150a9819a9b48144fc7c14f874eff8"
 
 [[package]]
 name = "vcell"
