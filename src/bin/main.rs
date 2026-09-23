@@ -61,6 +61,8 @@ use usbpd::{
 
 use {esp_backtrace as _, esp_println as _};
 
+esp_bootloader_esp_idf::esp_app_desc!();
+
 // Uncomment for vertical orientation
 // const X_OFFSET: u16 = 52;
 // const Y_OFFSET: u16 = 40;

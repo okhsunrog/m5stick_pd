@@ -790,6 +790,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3cb352a8df9c459d0bdf06957cb8293b8bc574138e8c546949955b29c485769"
 dependencies = [
  "chrono",
+ "defmt 1.0.1",
  "document-features",
  "embedded-storage",
  "esp-config",
