@@ -7,13 +7,17 @@
 )]
 
 use axp192_dd::{Axp192Async, AxpError, ChargeCurrentValue, Gpio0FunctionSelect, LdoId};
-use defmt::info;
+use core::fmt::Write;
+use defmt::{info, warn};
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
 use embassy_executor::Spawner;
 use embassy_sync::{blocking_mutex::raw::NoopRawMutex, mutex::Mutex};
 use embassy_time::{Duration, Timer};
 use embedded_graphics::{
-    mono_font::{MonoTextStyle, ascii::FONT_10X20},
+    mono_font::{
+        MonoTextStyle,
+        ascii::{FONT_6X10, FONT_10X20},
+    },
     pixelcolor::Rgb565,
     prelude::*,
     text::Text,
@@ -31,6 +35,7 @@ use esp_hal::{
     time::Rate,
     timer::timg::TimerGroup,
 };
+use heapless::String;
 use lcd_async::{
     Builder, Display, interface,
     models::Model,
@@ -42,8 +47,12 @@ use static_cell::{ConstStaticCell, StaticCell};
 
 use {esp_backtrace as _, esp_println as _};
 
+#[path = "../battery.rs"]
+mod battery;
 #[path = "../ble.rs"]
 mod ble;
+
+type Pmic = Axp192Async<axp192_dd::AxpInterface<I2c<'static, Async>>, I2cError>;
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
@@ -77,7 +86,8 @@ async fn main(_spawner: Spawner) {
         .with_scl(p.GPIO22)
         .into_async();
 
-    let _voltage: u32 = init_m5stickc_plus_pmic(i2c1).await.unwrap() as u32;
+    let mut pmic = Axp192Async::new(i2c1);
+    init_m5stickc_plus_pmic(&mut pmic).await.unwrap();
 
     // Creating SPI
     let sclk = p.GPIO13;
@@ -133,34 +143,122 @@ async fn main(_spawner: Spawner) {
         esp_alloc::HEAP.free()
     );
     let controller = trouble_host::prelude::ExternalController::<_, 1>::new(connector);
-    embassy_futures::join::join(display_task(display), ble::run(controller)).await;
+    embassy_futures::join::join(display_task(display, pmic), ble::run(controller)).await;
 }
 
-async fn display_task<DI, M, RST>(mut display: Display<DI, M, RST>)
+struct PowerReading {
+    voltage_mv: f32,
+    charge_ma: f32,
+    discharge_ma: f32,
+    usb_ma: f32,
+    battery_present: bool,
+    charging: bool,
+    usb_present: bool,
+}
+
+async fn read_power(pmic: &mut Pmic) -> Result<PowerReading, AxpError<I2cError>> {
+    let status = pmic.ll.charge_status().read_async().await?;
+    let power = pmic.ll.power_status().read_async().await?;
+    Ok(PowerReading {
+        voltage_mv: pmic.get_battery_voltage_mv().await?,
+        charge_ma: pmic.get_battery_charge_current_ma().await?,
+        discharge_ma: pmic.get_battery_discharge_current_ma().await?,
+        usb_ma: pmic.get_vbus_current_ma().await?,
+        battery_present: status.battery_connected(),
+        charging: status.charging_in_progress(),
+        usb_present: power.vbus_present(),
+    })
+}
+
+async fn display_task<DI, M, RST>(mut display: Display<DI, M, RST>, mut pmic: Pmic)
 where
     DI: interface::Interface<Word = u8>,
     M: Model,
     RST: OutputPin,
 {
     let frame_buffer = FRAME_BUFFER.take();
-    let text_style = MonoTextStyle::new(&FONT_10X20, Rgb565::WHITE);
-    let mut raw_fb =
-        RawFrameBuf::<Rgb565, _>::new(frame_buffer.as_mut_slice(), WIDTH.into(), HEIGHT.into());
-    raw_fb.clear(Rgb565::BLACK).unwrap();
-    Text::new("OxiFOC Remote Stick", Point::new(5, 20), text_style)
-        .draw(&mut raw_fb)
-        .unwrap();
-    display
-        .show_raw_data(0, 0, WIDTH, HEIGHT, frame_buffer)
-        .await
-        .unwrap();
-
-    core::future::pending::<()>().await;
+    let mut ticker = embassy_time::Ticker::every(Duration::from_secs(1));
+    loop {
+        let reading = read_power(&mut pmic).await;
+        {
+            let mut raw_fb = RawFrameBuf::<Rgb565, _>::new(
+                frame_buffer.as_mut_slice(),
+                WIDTH.into(),
+                HEIGHT.into(),
+            );
+            raw_fb.clear(Rgb565::BLACK).unwrap();
+            let header = MonoTextStyle::new(&FONT_6X10, Rgb565::CYAN);
+            Text::new("OxiFOC Remote Stick", Point::new(5, 12), header)
+                .draw(&mut raw_fb)
+                .unwrap();
+            let style = MonoTextStyle::new(&FONT_10X20, Rgb565::WHITE);
+            match reading {
+                Ok(power) => {
+                    let soc = battery::estimate_soc_percent(power.voltage_mv, power.charge_ma);
+                    let mut line: String<32> = String::new();
+                    if power.battery_present {
+                        write!(
+                            line,
+                            "SoC ~{}%  {}",
+                            soc,
+                            if power.charging {
+                                "CHG"
+                            } else if power.usb_present {
+                                "USB"
+                            } else {
+                                "BAT"
+                            }
+                        )
+                        .unwrap();
+                    } else {
+                        line.push_str("No battery").unwrap();
+                    }
+                    Text::new(&line, Point::new(5, 36), style)
+                        .draw(&mut raw_fb)
+                        .unwrap();
+                    for (label, value, unit, y) in [
+                        ("Vbat", power.voltage_mv, "mV", 58),
+                        ("Charge", power.charge_ma, "mA", 80),
+                        ("Dischg", power.discharge_ma, "mA", 102),
+                        ("USB in", power.usb_ma, "mA", 124),
+                    ] {
+                        line.clear();
+                        write!(line, "{}: {:.1} {}", label, value, unit).unwrap();
+                        Text::new(&line, Point::new(5, y), style)
+                            .draw(&mut raw_fb)
+                            .unwrap();
+                    }
+                    info!(
+                        "Power: SoC~{}% Vbat={}mV charge={}mA discharge={}mA USB={}mA battery={} charging={} usb={}",
+                        soc,
+                        power.voltage_mv,
+                        power.charge_ma,
+                        power.discharge_ma,
+                        power.usb_ma,
+                        power.battery_present,
+                        power.charging,
+                        power.usb_present
+                    );
+                }
+                Err(e) => {
+                    warn!("Power read failed: {:?}", defmt::Debug2Format(&e));
+                    Text::new("PMIC read error", Point::new(5, 58), style)
+                        .draw(&mut raw_fb)
+                        .unwrap();
+                }
+            }
+        }
+        display
+            .show_raw_data(0, 0, WIDTH, HEIGHT, frame_buffer)
+            .await
+            .unwrap();
+        info!("Power display updated");
+        ticker.next().await;
+    }
 }
 
 #[rustfmt::skip]
-async fn init_m5stickc_plus_pmic(i2c: I2c<'_, Async>) -> Result<f32, AxpError<I2cError>> {
-    let mut axp = Axp192Async::new(i2c);
+async fn init_m5stickc_plus_pmic(axp: &mut Pmic) -> Result<(), AxpError<I2cError>> {
     axp.set_ldo_voltage_mv(LdoId::Ldo2, 3300).await?;
     axp.ll.charge_control_1().write_async(|r| r.set_charge_current(ChargeCurrentValue::Ma100)).await?;
     axp.set_gpio0_ldo_voltage_mv(3300).await?;
@@ -183,6 +281,7 @@ async fn init_m5stickc_plus_pmic(i2c: I2c<'_, Async>) -> Result<f32, AxpError<I2
         Timer::after(Duration::from_secs(1)).await;
 
     axp.ll.adc_enable_1().write_async(|r| {
+        r.set_battery_voltage_adc_enable(true);
         r.set_battery_current_adc_enable(true);
         r.set_acin_voltage_adc_enable(true);
         r.set_acin_current_adc_enable(true);
@@ -197,5 +296,5 @@ async fn init_m5stickc_plus_pmic(i2c: I2c<'_, Async>) -> Result<f32, AxpError<I2
 
     info!("Battery voltage: {} mV", bat_voltage);
     info!("Charge current: {} mA", axp.get_battery_charge_current_ma().await?);
-    Ok(bat_voltage)
+    Ok(())
 }
