@@ -3,6 +3,9 @@ runner = "espflash flash --monitor --chip esp32 --log-format defmt"
 
 [env]
 DEFMT_LOG="info"
+# Experimental opt-in for this M5StickC Plus (ESP32 v1.1).
+# Upstream officially supports ESP32 v3.0 and newer.
+ESP_HAL_CONFIG_MIN_CHIP_REVISION = "101"
 
 [build]
 rustflags = [

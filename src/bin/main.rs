@@ -7,15 +7,10 @@
 )]
 
 use axp192_dd::{Axp192Async, AxpError, ChargeCurrentValue, Gpio0FunctionSelect, LdoId};
-use core::fmt::Write;
-use defmt::{error, info};
+use defmt::info;
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
 use embassy_executor::Spawner;
-use embassy_sync::{
-    blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex},
-    channel::Channel,
-    mutex::Mutex,
-};
+use embassy_sync::{blocking_mutex::raw::NoopRawMutex, mutex::Mutex};
 use embassy_time::{Duration, Timer};
 use embedded_graphics::{
     mono_font::{MonoTextStyle, ascii::FONT_10X20},
@@ -27,18 +22,15 @@ use embedded_hal::digital::OutputPin;
 use esp_hal::{
     Async,
     clock::CpuClock,
-    dma::{DmaRxBuf, DmaTxBuf},
     gpio::{Level, Output},
     i2c::master::{Config as I2cConfig, Error as I2cError, I2c},
     spi::{
         Mode,
-        master::{Config, Spi, SpiDmaBus},
+        master::{Config, Spi},
     },
     time::Rate,
     timer::timg::TimerGroup,
 };
-use fusb302b::Fusb302b;
-use heapless::String;
 use lcd_async::{
     Builder, Display, interface,
     models::Model,
@@ -46,108 +38,39 @@ use lcd_async::{
     options::{ColorInversion, Orientation, Rotation},
     raw_framebuf::RawFrameBuf,
 };
-use static_cell::StaticCell;
-use usbpd::{
-    protocol_layer::message::data::{
-        request::{self, PowerSource},
-        source_capabilities::{Augmented, PowerDataObject, SourceCapabilities},
-    },
-    sink::{
-        device_policy_manager::{DevicePolicyManager, Event},
-        policy_engine::Sink,
-    },
-    timers::Timer as PdTimer,
-};
+use static_cell::{ConstStaticCell, StaticCell};
 
 use {esp_backtrace as _, esp_println as _};
 
+#[path = "../ble.rs"]
+mod ble;
+
 esp_bootloader_esp_idf::esp_app_desc!();
 
-// Uncomment for vertical orientation
-// const X_OFFSET: u16 = 52;
-// const Y_OFFSET: u16 = 40;
-// const W_ACTIVE: u16 = 135;
-// const H_ACTIVE: u16 = 240;
-const X_OFFSET: u16 = 203;
+// Native ST7789 panel offsets; orientation rotates the 135x240 panel to landscape.
+const X_OFFSET: u16 = 52;
 const Y_OFFSET: u16 = 40;
 const WIDTH: u16 = 240;
 const HEIGHT: u16 = 135;
 
 const PXL_SIZE: usize = 2;
 const FRAME_BUFFER_SIZE: usize = (WIDTH * HEIGHT) as usize * PXL_SIZE;
-static FRAME_BUFFER: StaticCell<[u8; FRAME_BUFFER_SIZE]> = StaticCell::new();
+static FRAME_BUFFER: ConstStaticCell<[u8; FRAME_BUFFER_SIZE]> =
+    ConstStaticCell::new([0; FRAME_BUFFER_SIZE]);
 
-// --- Shared State using Embassy Channel ---
-// This channel will be used to send source capabilities from the PD task to the display task.
-static CAPABILITIES_CHANNEL: Channel<CriticalSectionRawMutex, SourceCapabilities, 3> =
-    Channel::new();
-
-struct AppTimer;
-impl PdTimer for AppTimer {
-    async fn after_millis(milliseconds: u64) {
-        Timer::after(Duration::from_millis(milliseconds)).await;
-    }
-}
-
-// 2. Implement your device's policy.
-// This struct will now hold a reference to the communication channel.
-struct MyDevicePolicyManager {
-    channel: &'static Channel<CriticalSectionRawMutex, SourceCapabilities, 3>,
-}
-
-impl DevicePolicyManager for MyDevicePolicyManager {
-    // This function is called by the policy engine when it receives capabilities.
-    async fn request(&mut self, source_capabilities: &SourceCapabilities) -> PowerSource {
-        info!(
-            "Source capabilities received: {}",
-            source_capabilities.pdos()
-        );
-
-        // Send the received capabilities to the display task.
-        // try_send is non-blocking and will overwrite the old value if the channel is full,
-        // which is perfect for displaying the latest state.
-        self.channel.try_send(source_capabilities.clone()).ok();
-
-        request::PowerSource::new_fixed(
-            request::CurrentRequest::Highest,
-            request::VoltageRequest::Safe5V,
-            source_capabilities,
-        )
-        .unwrap()
-    }
-
-    // This function is called after a new power contract is successfully established.
-    async fn transition_power(&mut self, accepted: &PowerSource) {
-        info!("Power transition accepted: {}", accepted);
-        // In a real application, you might enable a high-power circuit here.
-    }
-
-    // This function can be used to send events from the application to the policy engine.
-    async fn get_event(&mut self, _source_capabilities: &SourceCapabilities) -> Event {
-        // This future never resolves, so we won't send any events.
-        core::future::pending().await
-    }
-}
-
-#[esp_hal_embassy::main]
-async fn main(spawner: Spawner) {
+#[esp_hal::main]
+async fn main(_spawner: Spawner) {
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let p = esp_hal::init(config);
-    // esp_alloc::heap_allocator!(#[unsafe(link_section = ".dram2_uninit")] size: 64 * 1024);
+    // Reuse bootloader RAM so the BLE heap does not crowd out the framebuffer and stack.
+    esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 64 * 1024);
+    esp_alloc::heap_allocator!(size: 8 * 1024);
 
     let timer0 = TimerGroup::new(p.TIMG1);
-    esp_hal_embassy::init(timer0.timer0);
+    esp_rtos::start(timer0.timer0);
 
     info!("Embassy initialized!");
-    let _int_fusb_pin = p.GPIO0;
-    let config_i2c0: I2cConfig = I2cConfig::default().with_frequency(Rate::from_khz(100));
     let config_i2c1: I2cConfig = I2cConfig::default().with_frequency(Rate::from_khz(400));
-    let i2c0 = I2c::new(p.I2C0, config_i2c0)
-        .unwrap()
-        .with_sda(p.GPIO25)
-        .with_scl(p.GPIO26)
-        .into_async();
-
     let i2c1 = I2c::new(p.I2C1, config_i2c1)
         .unwrap()
         .with_sda(p.GPIO21)
@@ -155,11 +78,6 @@ async fn main(spawner: Spawner) {
         .into_async();
 
     let _voltage: u32 = init_m5stickc_plus_pmic(i2c1).await.unwrap() as u32;
-
-    #[allow(clippy::manual_div_ceil)]
-    let (rx_buffer, rx_descriptors, tx_buffer, tx_descriptors) = esp_hal::dma_buffers!(4, 32_000);
-    let dma_rx_buf = DmaRxBuf::new(rx_descriptors, rx_buffer).unwrap();
-    let dma_tx_buf = DmaTxBuf::new(tx_descriptors, tx_buffer).unwrap();
 
     // Creating SPI
     let sclk = p.GPIO13;
@@ -176,15 +94,13 @@ async fn main(spawner: Spawner) {
     .unwrap()
     .with_sck(sclk)
     .with_mosi(mosi)
-    .with_dma(p.DMA_SPI2)
-    .with_buffers(dma_rx_buf, dma_tx_buf)
     .into_async();
 
     let res = Output::new(res, Level::Low, Default::default());
     let dc = Output::new(dc, Level::Low, Default::default());
     let cs = Output::new(cs, Level::High, Default::default());
 
-    static SPI_BUS: StaticCell<Mutex<NoopRawMutex, SpiDmaBus<'static, Async>>> = StaticCell::new();
+    static SPI_BUS: StaticCell<Mutex<NoopRawMutex, Spi<'static, Async>>> = StaticCell::new();
     let spi_bus = Mutex::new(spi);
     let spi_bus = SPI_BUS.init(spi_bus);
     let spi_device = SpiDevice::new(spi_bus, cs);
@@ -192,9 +108,10 @@ async fn main(spawner: Spawner) {
     let di = interface::SpiInterface::new(spi_device, dc);
     let mut delay = embassy_time::Delay;
 
+    info!("Initializing display over async SPI FIFO");
     let display = Builder::new(ST7789, di)
         .reset_pin(res)
-        .display_size(WIDTH, HEIGHT)
+        .display_size(HEIGHT, WIDTH)
         .orientation(Orientation {
             rotation: Rotation::Deg90,
             mirrored: false,
@@ -203,163 +120,42 @@ async fn main(spawner: Spawner) {
         .invert_colors(ColorInversion::Inverted)
         .init(&mut delay)
         .await
-        .unwrap();
+        .unwrap_or_else(|e| panic!("Display init failed: {:?}", defmt::Debug2Format(&e)));
     info!("Display initialized!");
 
-    spawner.must_spawn(pd_task(i2c0, &CAPABILITIES_CHANNEL));
-
-    display_task(display, &CAPABILITIES_CHANNEL).await;
+    let connector = esp_radio::ble::controller::BleConnector::new(
+        p.BT,
+        esp_radio::ble::Config::default().with_modem_sleep(false),
+    )
+    .unwrap();
+    info!(
+        "BLE controller initialized; free heap: {} bytes",
+        esp_alloc::HEAP.free()
+    );
+    let controller = trouble_host::prelude::ExternalController::<_, 1>::new(connector);
+    embassy_futures::join::join(display_task(display), ble::run(controller)).await;
 }
-async fn display_task<DI, M, RST>(
-    mut display: Display<DI, M, RST>,
-    channel: &'static Channel<CriticalSectionRawMutex, SourceCapabilities, 3>,
-) where
+
+async fn display_task<DI, M, RST>(mut display: Display<DI, M, RST>)
+where
     DI: interface::Interface<Word = u8>,
     M: Model,
     RST: OutputPin,
 {
-    // Initialize the frame buffer ONCE.
-    let frame_buffer = FRAME_BUFFER.init([0; FRAME_BUFFER_SIZE]);
+    let frame_buffer = FRAME_BUFFER.take();
     let text_style = MonoTextStyle::new(&FONT_10X20, Rgb565::WHITE);
-
-    // --- Show the "Waiting" screen just once, BEFORE the main loop ---
-    {
-        let mut raw_fb =
-            RawFrameBuf::<Rgb565, _>::new(frame_buffer.as_mut_slice(), WIDTH.into(), HEIGHT.into());
-        raw_fb.clear(Rgb565::BLACK).unwrap();
-        Text::new("Waiting for source...", Point::new(5, 20), text_style)
-            .draw(&mut raw_fb)
-            .unwrap();
-    }
+    let mut raw_fb =
+        RawFrameBuf::<Rgb565, _>::new(frame_buffer.as_mut_slice(), WIDTH.into(), HEIGHT.into());
+    raw_fb.clear(Rgb565::BLACK).unwrap();
+    Text::new("OxiFOC Remote Stick", Point::new(5, 20), text_style)
+        .draw(&mut raw_fb)
+        .unwrap();
     display
         .show_raw_data(0, 0, WIDTH, HEIGHT, frame_buffer)
         .await
         .unwrap();
 
-    // --- Main Update Loop ---
-    // This loop will now only run when new data is received.
-    loop {
-        // Block here until new capabilities are sent from the pd_task.
-        // This is the new "waiting" state.
-        let caps: SourceCapabilities = channel.receive().await;
-
-        // When we receive data, we update the screen.
-        {
-            let mut raw_fb = RawFrameBuf::<Rgb565, _>::new(
-                frame_buffer.as_mut_slice(),
-                WIDTH.into(),
-                HEIGHT.into(),
-            );
-            raw_fb.clear(Rgb565::BLACK).unwrap();
-
-            let mut y_pos = 20;
-            Text::new("Source PDOs:", Point::new(5, y_pos), text_style)
-                .draw(&mut raw_fb)
-                .unwrap();
-            y_pos += 20;
-
-            for pdo in caps.pdos().iter() {
-                let mut pdo_str: String<64> = String::new();
-                if write_pdo_to_string(pdo, &mut pdo_str).is_ok() {
-                    Text::new(&pdo_str, Point::new(5, y_pos), text_style)
-                        .draw(&mut raw_fb)
-                        .unwrap();
-                    y_pos += 15;
-                }
-            }
-        }
-        // Push the final rendered frame to the display
-        display
-            .show_raw_data(0, 0, WIDTH, HEIGHT, frame_buffer)
-            .await
-            .unwrap();
-
-        // The loop will now return to the top and wait at `channel.receive().await`
-        // for the *next* time a source is connected. The PDO list will remain on screen.
-    }
-}
-
-// Helper function to format a PowerDataObject for display
-fn write_pdo_to_string(pdo: &PowerDataObject, s: &mut String<64>) -> core::fmt::Result {
-    match pdo {
-        PowerDataObject::FixedSupply(f) => {
-            write!(
-                s,
-                "FIXED: {}mV {}mA",
-                f.voltage().get::<uom::si::electric_potential::millivolt>(),
-                f.max_current()
-                    .get::<uom::si::electric_current::milliampere>()
-            )
-        }
-        PowerDataObject::VariableSupply(v) => {
-            write!(
-                s,
-                "VAR: {}-{}mV {}mA",
-                v.min_voltage()
-                    .get::<uom::si::electric_potential::millivolt>(),
-                v.max_voltage()
-                    .get::<uom::si::electric_potential::millivolt>(),
-                v.max_current()
-                    .get::<uom::si::electric_current::milliampere>()
-            )
-        }
-        PowerDataObject::Battery(b) => {
-            write!(
-                s,
-                "BATT: {}-{}mV {}mW",
-                b.min_voltage()
-                    .get::<uom::si::electric_potential::millivolt>(),
-                b.max_voltage()
-                    .get::<uom::si::electric_potential::millivolt>(),
-                b.max_power().get::<uom::si::power::milliwatt>()
-            )
-        }
-        PowerDataObject::Augmented(a) => match a {
-            Augmented::Spr(pps) => {
-                write!(
-                    s,
-                    "PPS: {}-{}mV {}mA",
-                    pps.min_voltage()
-                        .get::<uom::si::electric_potential::millivolt>(),
-                    pps.max_voltage()
-                        .get::<uom::si::electric_potential::millivolt>(),
-                    pps.max_current()
-                        .get::<uom::si::electric_current::milliampere>()
-                )
-            }
-            _ => write!(s, "Augmented PDO (EPR?)"),
-        },
-        _ => write!(s, "Unknown PDO"),
-    }
-}
-
-#[embassy_executor::task]
-async fn pd_task(
-    i2c: I2c<'static, Async>,
-    channel: &'static Channel<CriticalSectionRawMutex, SourceCapabilities, 3>,
-) {
-    // 3. Instantiate your FUSB302B driver
-    let fusb_driver = match Fusb302b::init(i2c).await {
-        Ok(driver) => driver,
-        Err(e) => {
-            error!("Failed to initialize FUSB302B: {:?}", e);
-            return;
-        }
-    };
-    info!("FUSB302B Initialized!");
-
-    // 4. Instantiate your application's policy manager, passing the channel
-    let dpm = MyDevicePolicyManager { channel };
-
-    // 5. Instantiate the policy engine with your driver, timer, and DPM
-    let mut policy_engine = Sink::<_, AppTimer, _>::new(fusb_driver, dpm);
-
-    info!("Starting USB-PD Policy Engine...");
-
-    // 6. Run the policy engine forever
-    if let Err(e) = policy_engine.run().await {
-        error!("Policy engine exited with error: {:?}", e);
-    }
+    core::future::pending::<()>().await;
 }
 
 #[rustfmt::skip]
