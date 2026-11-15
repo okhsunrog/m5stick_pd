@@ -5,6 +5,15 @@ diagnostic BLE peripheral. The diagnostic service does not control a motor.
 The display uses async SPI FIFO transfers at 20 MHz and a statically initialized
 framebuffer. The 72 KiB heap includes 64 KiB reclaimed from the bootloader.
 
+## Power button
+
+Holding the Power button for four seconds requests hardware shutdown through
+AXP192. Startup enables this behavior and selects the four-second threshold in
+register `0x36`, preserving the other PEK settings. Both fields are read back
+and checked before startup continues. Readback was confirmed on the connected
+board; physical button-hold timing was not measured. Buttons A and B have no
+assigned actions.
+
 ## Power screen
 
 The screen refreshes once per second from the AXP192 ADC and status registers:

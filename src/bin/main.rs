@@ -6,7 +6,9 @@
     holding buffers for the duration of a data transfer."
 )]
 
-use axp192_dd::{Axp192Async, AxpError, ChargeCurrentValue, Gpio0FunctionSelect, LdoId};
+use axp192_dd::{
+    Axp192Async, AxpError, ChargeCurrentValue, Gpio0FunctionSelect, LdoId, PekShutdownTime,
+};
 use core::fmt::Write;
 use defmt::{info, warn};
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
@@ -259,6 +261,15 @@ where
 
 #[rustfmt::skip]
 async fn init_m5stickc_plus_pmic(axp: &mut Pmic) -> Result<(), AxpError<I2cError>> {
+    axp.ll.pek_key_parameters().modify_async(|r| {
+        r.set_shutdown_time(PekShutdownTime::S4);
+        r.set_auto_shutdown_if_pek_held_longer_than_shutdown_time(true);
+    }).await?;
+    let pek = axp.ll.pek_key_parameters().read_async().await?;
+    assert!(matches!(pek.shutdown_time(), PekShutdownTime::S4));
+    assert!(pek.auto_shutdown_if_pek_held_longer_than_shutdown_time());
+    info!("Power key: hardware shutdown after 4 s (register readback verified)");
+
     axp.set_ldo_voltage_mv(LdoId::Ldo2, 3300).await?;
     axp.ll.charge_control_1().write_async(|r| r.set_charge_current(ChargeCurrentValue::Ma100)).await?;
     axp.set_gpio0_ldo_voltage_mv(3300).await?;
