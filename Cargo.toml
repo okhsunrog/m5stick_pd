@@ -29,7 +29,12 @@ esp-bootloader-esp-idf = { git = "https://github.com/esp-rs/esp-hal.git", rev = 
 esp-backtrace = { git = "https://github.com/esp-rs/esp-hal.git", rev = "c72d6805fce0764bbe97d1e97a47896c6d4744bf", version = "0.20.0", features = ["esp32", "defmt", "panic-handler"] }
 esp-println = { git = "https://github.com/esp-rs/esp-hal.git", rev = "c72d6805fce0764bbe97d1e97a47896c6d4744bf", version = "0.18.0", features = ["esp32", "defmt-espflash"] }
 embassy-futures = "0.1.2"
-trouble-host = { git = "https://github.com/embassy-rs/trouble.git", rev = "042bd1c3bdc5980f66d28e0e698b6e579b15da4e", version = "0.8.0", default-features = false, features = ["defmt", "peripheral", "gatt", "derive", "default-packet-pool"] }
+# Same trouble revision and features as oxifoc-remote, for a like-for-like link comparison.
+trouble-host = { git = "https://github.com/embassy-rs/trouble.git", rev = "da44b34f67e1ee8efe977a5a975804b8b21962d4", version = "0.8.0", default-features = false, features = ["defmt", "central", "gatt", "default-packet-pool-mtu-512"] }
+oxifoc-core = { version = "0.1.0", path = "../oxifoc/oxifoc-core", features = ["icd", "defmt"] }
+ergot = { git = "https://github.com/okhsunrog/ergot", rev = "daeb0a75f79949100ff72f86a4514c503649977a", version = "0.12.0", default-features = false, features = ["embassy-time", "disable-cache-padding", "defmt-v1"] }
+mutex = "1.0.2"
+bbqueue = "0.7"
 heapless = { version = "0.9.3", default-features = false }
 
 [profile.dev]

@@ -51,12 +51,17 @@ use {esp_backtrace as _, esp_println as _};
 
 #[path = "../battery.rs"]
 mod battery;
-#[path = "../ble.rs"]
-mod ble;
+#[path = "../link.rs"]
+mod link;
+#[path = "../transport.rs"]
+mod transport;
 
 type Pmic = Axp192Async<axp192_dd::AxpInterface<I2c<'static, Async>>, I2cError>;
 
 esp_bootloader_esp_idf::esp_app_desc!();
+
+// Uptime on every defmt line, to compare timings with the nRF52840 remote.
+defmt::timestamp!("{=u64:us}", embassy_time::Instant::now().as_micros());
 
 // Native ST7789 panel offsets; orientation rotates the 135x240 panel to landscape.
 const X_OFFSET: u16 = 52;
@@ -145,7 +150,7 @@ async fn main(_spawner: Spawner) {
         esp_alloc::HEAP.free()
     );
     let controller = trouble_host::prelude::ExternalController::<_, 1>::new(connector);
-    embassy_futures::join::join(display_task(display, pmic), ble::run(controller)).await;
+    embassy_futures::join::join(display_task(display, pmic), link::run(controller)).await;
 }
 
 struct PowerReading {
@@ -194,42 +199,29 @@ where
                 .draw(&mut raw_fb)
                 .unwrap();
             let style = MonoTextStyle::new(&FONT_10X20, Rgb565::WHITE);
+            draw_link(&mut raw_fb, style);
+            let small = MonoTextStyle::new(&FONT_6X10, Rgb565::WHITE);
             match reading {
                 Ok(power) => {
                     let soc = battery::estimate_soc_percent(power.voltage_mv, power.charge_ma);
-                    let mut line: String<32> = String::new();
-                    if power.battery_present {
-                        write!(
-                            line,
-                            "SoC ~{}%  {}",
-                            soc,
-                            if power.charging {
-                                "CHG"
-                            } else if power.usb_present {
-                                "USB"
-                            } else {
-                                "BAT"
-                            }
-                        )
-                        .unwrap();
-                    } else {
-                        line.push_str("No battery").unwrap();
-                    }
-                    Text::new(&line, Point::new(5, 36), style)
+                    let mut line: String<40> = String::new();
+                    write!(
+                        line,
+                        "Bat ~{}% {:.0}mV {}",
+                        soc,
+                        power.voltage_mv,
+                        if power.charging {
+                            "CHG"
+                        } else if power.usb_present {
+                            "USB"
+                        } else {
+                            "BAT"
+                        }
+                    )
+                    .unwrap();
+                    Text::new(&line, Point::new(5, 128), small)
                         .draw(&mut raw_fb)
                         .unwrap();
-                    for (label, value, unit, y) in [
-                        ("Vbat", power.voltage_mv, "mV", 58),
-                        ("Charge", power.charge_ma, "mA", 80),
-                        ("Dischg", power.discharge_ma, "mA", 102),
-                        ("USB in", power.usb_ma, "mA", 124),
-                    ] {
-                        line.clear();
-                        write!(line, "{}: {:.1} {}", label, value, unit).unwrap();
-                        Text::new(&line, Point::new(5, y), style)
-                            .draw(&mut raw_fb)
-                            .unwrap();
-                    }
                     info!(
                         "Power: SoC~{}% Vbat={}mV charge={}mA discharge={}mA USB={}mA battery={} charging={} usb={}",
                         soc,
@@ -244,7 +236,7 @@ where
                 }
                 Err(e) => {
                     warn!("Power read failed: {:?}", defmt::Debug2Format(&e));
-                    Text::new("PMIC read error", Point::new(5, 58), style)
+                    Text::new("PMIC read error", Point::new(5, 128), small)
                         .draw(&mut raw_fb)
                         .unwrap();
                 }
@@ -254,9 +246,43 @@ where
             .show_raw_data(0, 0, WIDTH, HEIGHT, frame_buffer)
             .await
             .unwrap();
-        info!("Power display updated");
         ticker.next().await;
     }
+}
+
+fn draw_link<D>(target: &mut D, style: MonoTextStyle<'_, Rgb565>)
+where
+    D: DrawTarget<Color = Rgb565>,
+{
+    use core::sync::atomic::Ordering::Relaxed;
+    let s = &link::STATS;
+    let up = s.active.load(Relaxed) != 0;
+    let status = MonoTextStyle::new(&FONT_10X20, if up { Rgb565::GREEN } else { Rgb565::RED });
+    let _ = Text::new(
+        if up { "LINK UP" } else { "SEARCHING" },
+        Point::new(5, 34),
+        status,
+    )
+    .draw(target);
+    let mut line: String<32> = String::new();
+    let _ = write!(
+        line,
+        "Att {} Fail {}",
+        s.attempts.load(Relaxed),
+        s.not_established.load(Relaxed)
+    );
+    let _ = Text::new(&line, Point::new(5, 56), style).draw(target);
+    line.clear();
+    let _ = write!(
+        line,
+        "Sess {} Loss {}",
+        s.sessions.load(Relaxed),
+        s.losses.load(Relaxed)
+    );
+    let _ = Text::new(&line, Point::new(5, 78), style).draw(target);
+    line.clear();
+    let _ = write!(line, "Recov {} ms", s.last_recovery_ms.load(Relaxed));
+    let _ = Text::new(&line, Point::new(5, 100), style).draw(target);
 }
 
 #[rustfmt::skip]

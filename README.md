@@ -1,7 +1,9 @@
 # OxiFOC Remote Stick
 
-M5StickC Plus firmware with AXP192 power management, an ST7789 display and a
-diagnostic BLE peripheral. The diagnostic service does not control a motor.
+M5StickC Plus firmware with AXP192 power management, an ST7789 display and the
+`oxifoc-remote` BLE link to `oxifoc-bridge`. It exists to compare the ESP32
+radio with the nRF52840 remote on the same bridge. It has no throttle and does
+not command a motor.
 The display uses async SPI FIFO transfers at 20 MHz and a statically initialized
 framebuffer. The 72 KiB heap includes 64 KiB reclaimed from the bootloader.
 
@@ -14,30 +16,31 @@ and checked before startup continues. Readback was confirmed on the connected
 board; physical button-hold timing was not measured. Buttons A and B have no
 assigned actions.
 
-## Power screen
+## Screen
 
-The screen refreshes once per second from the AXP192 ADC and status registers:
+The screen refreshes once per second:
 
-- `SoC ~`: approximate battery percentage, with `CHG`, `USB` or `BAT` status.
-- `Vbat`: battery voltage in mV.
-- `Charge`: current flowing into the battery, in mA.
-- `Dischg`: current flowing out of the battery, in mA.
-- `USB in`: total VBUS input current in mA, including charging current.
+- `LINK UP` or `SEARCHING`: whether an ergot session to the bridge is active.
+- `Att` / `Fail`: connection attempts, and links that dropped before the GATT
+  client came up (for example 0x3E, failed establishment).
+- `Sess` / `Loss`: ergot sessions that became active, and sessions that ended
+  with a link loss.
+- `Recov`: time from the last link loss to the next active session, in ms.
+- `Bat`: AXP192 voltage-based SoC estimate, battery voltage and `CHG`, `USB` or
+  `BAT` status. SoC follows M5Unified's estimate and is not a fuel gauge.
 
-`Dischg` can be zero on USB while the device is consuming power. Neither battery
-current channel alone measures total system consumption when USB is connected.
-SoC follows M5Unified's AXP192 voltage-based estimate, including its charging
-correction, clamped to 0–100%. It is not a calibrated fuel gauge and varies with
-load and charging. No coulomb-counter calibration or battery-capacity measurement
-is implied. An I2C error replaces the readings with `PMIC read error` until the
-next successful sample.
+The UART log also prints the AXP192 battery, charge, discharge and VBUS
+currents every second.
 
 ## Hardware and dependency versions
 
 - Target: ESP32, M5StickC Plus, 4 MB flash.
 - `esp-hal`, `esp-radio` and the companion Espressif crates are pinned to
   `c72d6805fce0764bbe97d1e97a47896c6d4744bf` (upstream HEAD checked on 2026-11-15).
-- `trouble-host` is pinned to `042bd1c3bdc5980f66d28e0e698b6e579b15da4e`.
+- `trouble-host` is pinned to `da44b34f67e1ee8efe977a5a975804b8b21962d4`, the
+  same revision and features as `oxifoc-remote`.
+- `oxifoc-core` comes from `../oxifoc` (path dependency) for the BLE UUIDs and
+  the ICD.
 - `lcd-async` is pinned to `ab6b71d6`.
 
 **Experimental ESP32 v1.1 opt-in:** current upstream `esp-hal` supports ESP32
@@ -59,43 +62,32 @@ cargo run --release --locked
 The Cargo runner flashes the firmware and opens a defmt serial monitor. Specify
 `ESPFLASH_PORT` when several serial devices are attached.
 
-## BLE diagnostics
+## Bridge link
 
-The device advertises as `OxiFOC Remote Stick` with a static-random address
-derived from its factory MAC. It accepts one connection. Pairing and encryption
-are not configured.
+`src/link.rs` is a port of the BLE part of `oxifoc-remote/src/remote.rs`:
 
-Service UUID: `c5a10000-7d3e-4f71-9a52-3b64e80f2401`.
+- BLE central with a static-random address derived from the factory MAC. It
+  connects only to the bridge's fixed address.
+- Connection interval 15–20 ms, latency 0, supervision timeout 1 s.
+- A lost session reconnects immediately; the first three failed attempts retry
+  at once, longer runs back off from 50 ms to 1 s.
+- OxiFOC GATT service from `oxifoc_core::ble`, ergot `DirectEdge` over it,
+  `HardwareInfo` and ergot device-info servers.
 
-| Characteristic UUID | Properties | Value |
-| --- | --- | --- |
-| `c5a10001-7d3e-4f71-9a52-3b64e80f2401` | Read, write, notify | Four-byte little-endian echo register; notifies after a successful write |
-| `c5a10002-7d3e-4f71-9a52-3b64e80f2401` | Read, notify | Four-byte little-endian uptime in seconds; updates every second while connected |
+The bridge accepts one connection, so power off the nRF52840 remote during a
+comparison. The ESP32 TX power is the controller default; this esp-radio
+revision does not expose it.
 
-On a Linux computer with BlueZ, a powered Bluetooth adapter and `uv`:
+### Comparison on 2026-11-17
 
-```sh
-uv run scripts/ble_smoke.py
-```
+Same bridge and placement, single CPU core.
 
-The script discovers the physical device, validates service properties and its
-GAP name, checks echo reads/writes/notifications and rejection of a malformed
-write, observes increasing uptime notifications, and disconnects/reconnects
-over three connection cycles. It emits JSON lines and exits unsuccessfully on any failed check.
-Use `--address` to select a device, and `--cycles`, `--writes`, `--seconds` to
-adjust the test duration.
+| | nRF52840 remote | This stick |
+|---|---|---|
+| Bridge reset: link loss → session active | 287–312 ms, 0 failed establishments in 7 | 280–419 ms, median ≈319 ms |
+| Power-on: connect start → session active | ≈490 ms, 0 failures in 10 | 300–380 ms, 0 failures in 8 |
+| Failed establishments, all runs | 0 of 17 | 2 of 17 |
 
-The test verifies BLE diagnostics on the selected hardware. It does not qualify
-this unsupported silicon revision, motor control, pairing, encryption, sleep,
-power consumption or the display's visual appearance.
-
-### Physical test on 2026-11-15
-
-With the power screen refreshing, the connected ESP32 v1.1 passed three
-connection cycles in 67.81 seconds:
-60 echo writes with matching notifications, readback checks, 54 increasing uptime
-notifications, and six rejected writes with invalid lengths (1 and 5 bytes).
-After disconnecting, advertising resumed. The final UART capture contained no
-panics or error logs. The capture recorded 82 successful PMIC samples and screen
-transfers. The display's appearance and battery discharge with USB unplugged
-were not checked.
+Only reconnects were measured, not range, hand blocking, RSSI or long runs.
+The stick reaches its first attempt about 2.5 s after boot because of PMIC and
+display initialization delays.
